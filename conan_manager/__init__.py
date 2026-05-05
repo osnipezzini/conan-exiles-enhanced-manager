@@ -1,0 +1,5 @@
+"""Conan Exiles Enhanced Manager."""
+from __future__ import annotations
+
+__app_name__ = "Conan Exiles Enhanced Manager"
+__version__ = "0.8.0"

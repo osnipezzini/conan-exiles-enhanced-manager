@@ -1,0 +1,127 @@
+"""Local Steam Workshop scanning and cache updates."""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from ..models.workshop import (
+    WORKSHOP_STATUS_DOWNLOADED,
+    WORKSHOP_STATUS_DUPLICATE_PAK,
+    WORKSHOP_STATUS_MISSING,
+    WORKSHOP_STATUS_NO_PAK,
+    WorkshopItem,
+)
+from .workshop_cache import WorkshopCache
+
+log = logging.getLogger(__name__)
+
+
+class WorkshopService:
+    def __init__(self, cache: WorkshopCache):
+        self.cache = cache
+
+    def list_items(self) -> list[WorkshopItem]:
+        return self.cache.list_items()
+
+    def add_ids(self, workshop_ids: list[str], workshop_root: Path | None) -> list[WorkshopItem]:
+        items = self.cache.list_items()
+        by_id = {item.workshop_id: item for item in items}
+        changed = False
+        for workshop_id in workshop_ids:
+            if workshop_id in by_id:
+                continue
+            item = self._item_from_folder(workshop_id, workshop_root)
+            items.append(item)
+            by_id[workshop_id] = item
+            changed = True
+        if changed:
+            self.cache.save(items)
+        return items
+
+    def scan(self, workshop_root: Path | None) -> list[WorkshopItem]:
+        current = self.cache.list_items()
+        by_id = {item.workshop_id: item for item in current}
+        ordered_ids = [item.workshop_id for item in current]
+
+        if workshop_root and workshop_root.is_dir():
+            for folder in sorted(path for path in workshop_root.iterdir() if path.is_dir() and path.name.isdigit()):
+                if folder.name not in by_id:
+                    ordered_ids.append(folder.name)
+                by_id[folder.name] = self._item_from_folder(folder.name, workshop_root, existing=by_id.get(folder.name))
+
+        for workshop_id in list(ordered_ids):
+            existing = by_id[workshop_id]
+            if existing.folder_path and existing.folder_path.is_dir():
+                by_id[workshop_id] = self._item_from_folder(workshop_id, workshop_root, existing=existing)
+            else:
+                by_id[workshop_id] = self._missing_item(workshop_id, workshop_root, existing=existing)
+
+        updated = [by_id[workshop_id] for workshop_id in ordered_ids if workshop_id in by_id]
+        self.cache.save(updated)
+        log.info("Scanned Workshop content: %s item(s)", len(updated))
+        return updated
+
+    def _item_from_folder(
+        self,
+        workshop_id: str,
+        workshop_root: Path | None,
+        *,
+        existing: WorkshopItem | None = None,
+    ) -> WorkshopItem:
+        folder = workshop_root / workshop_id if workshop_root else None
+        if not folder or not folder.is_dir():
+            return self._missing_item(workshop_id, workshop_root, existing=existing)
+
+        pak_paths = sorted(path for path in folder.rglob("*.pak") if path.is_file())
+        file_paths = [path for path in folder.rglob("*") if path.is_file()]
+        local_size = sum(_safe_size(path) for path in file_paths)
+        modified_time = max((_safe_mtime(path) for path in file_paths), default=_safe_mtime(folder))
+        if not pak_paths:
+            status = WORKSHOP_STATUS_NO_PAK
+        elif len(pak_paths) == 1:
+            status = WORKSHOP_STATUS_DOWNLOADED
+        else:
+            status = WORKSHOP_STATUS_DUPLICATE_PAK
+        return WorkshopItem(
+            workshop_id=workshop_id,
+            title=existing.title if existing else "",
+            folder_path=folder,
+            pak_paths=pak_paths,
+            local_size=local_size,
+            modified_time=modified_time,
+            status=status,
+            compatibility_note=(existing.compatibility_note if existing else "Enhanced compatibility unknown"),
+        )
+
+    @staticmethod
+    def _missing_item(
+        workshop_id: str,
+        workshop_root: Path | None,
+        *,
+        existing: WorkshopItem | None = None,
+    ) -> WorkshopItem:
+        folder = workshop_root / workshop_id if workshop_root else None
+        return WorkshopItem(
+            workshop_id=workshop_id,
+            title=existing.title if existing else "",
+            folder_path=folder,
+            pak_paths=[],
+            local_size=0,
+            modified_time=0.0,
+            status=WORKSHOP_STATUS_MISSING,
+            compatibility_note=(existing.compatibility_note if existing else "Enhanced compatibility unknown"),
+        )
+
+
+def _safe_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _safe_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
