@@ -50,8 +50,12 @@ jobs:
     - name: Create release archive
       run: |
         cd CEMSM
-        ${{ matrix.archive_cmd }}
-      shell: ${{ matrix.os == 'windows-latest' && 'powershell' || 'bash' }}
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          powershell Compress-Archive -Path dist/* -DestinationPath ConanExilesEnhancedManager-windows.zip
+        else
+          tar -czf ConanExilesEnhancedManager-linux.tar.gz dist/
+        fi
+      shell: bash
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
