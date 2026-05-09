@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -51,7 +52,7 @@ jobs:
       run: |
         cd CEMSM
         if [ "$RUNNER_OS" == "Windows" ]; then
-          powershell Get-ChildItem dist | Compress-Archive -DestinationPath ConanExilesEnhancedManager-windows.zip
+          powershell -Command "Get-ChildItem dist | Compress-Archive -DestinationPath ConanExilesEnhancedManager-windows.zip"
         else
           tar -czf ConanExilesEnhancedManager-linux.tar.gz dist/
         fi
